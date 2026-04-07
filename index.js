@@ -155,18 +155,32 @@ bot.on('message', async (msg) => {
     // Check if she's "online" right now
     if (!shouldBeOnline()) return;
 
-    // Random chance to reply
-    if (Math.random() > REPLY_PROB) return;
-
-    // Don't reply to very short messages unless directly mentioned
-    // (avoids replying to "wkwk", "haha", "oh", "iya" etc)
-    const wordCount = text.trim().split(/\s+/).length;
-    if (wordCount <= 2 && !isMentioned) return;
-
     // Don't reply if message seems directed at someone else
-    // (contains @username that isn't Luna)
     const mentionsOther = text.includes('@') && !isMentioned;
     if (mentionsOther) return;
+
+    // Don't reply to very short messages (wkwk, haha, oh, iya, etc)
+    const wordCount = text.trim().split(/\s+/).length;
+    if (wordCount <= 2) return;
+
+    // Finance/geopolitics keywords — Luna is passionate about these
+    // so she's much more likely to jump in unprompted
+    const financeKeywords = [
+      'btc','bitcoin','eth','crypto','saham','forex','trading','xau','gold','emas',
+      'pump','dump','bullish','bearish','breakout','support','resistance','chart',
+      'timeframe','tf','entry','sl','tp','profit','rugi','loss','pair','market',
+      'iran','us','war','perang','geopolitik','fed','inflasi','dolar','dollar',
+      'nasdaq','sp500','oil','minyak','komoditas','altcoin','defi','macro','damai',
+      'perang','sanksi','nuklir','opec','rate','suku bunga'
+    ];
+
+    const msgLowerFull = text.toLowerCase();
+    const isFinanceTopic = financeKeywords.some(kw => msgLowerFull.includes(kw));
+
+    // Finance/geo topics: 80% chance she jumps in
+    // Everything else: normal reply probability
+    const effectiveProb = isFinanceTopic ? 0.8 : REPLY_PROB;
+    if (Math.random() > effectiveProb) return;
   }
 
   try {
