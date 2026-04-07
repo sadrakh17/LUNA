@@ -45,9 +45,10 @@ bot.on('my_chat_member', async (update) => {
       try {
         await bot.sendChatAction(chatId, 'typing');
         await sleep(2500);
-        const reply = await generateReply(chatId, `${BOT_NAME} baru masuk ke grup ini.`, {
+        let reply = await generateReply(chatId, `${BOT_NAME} baru masuk ke grup ini.`, {
           userId: 0, username: 'System', firstName: 'System',
         });
+        reply = reply.replace(/\n{2,}/g, ' ').trim();
         await bot.sendMessage(chatId, reply);
       } catch (err) {
         console.error('[Join greeting]', err.message);
@@ -127,9 +128,11 @@ bot.on('message', async (msg) => {
     await bot.sendChatAction(chatId, 'typing');
     await sleep(TYPING_DELAY + Math.random() * 1500);
 
-    const reply = await generateReply(chatId, text, senderMeta);
+    let reply = await generateReply(chatId, text, senderMeta);
 
     if (reply) {
+      // Collapse double line breaks into a single space — prevents double sends
+      reply = reply.replace(/\n{2,}/g, ' ').trim();
       const options = chatType !== 'private' ? { reply_to_message_id: msg.message_id } : {};
       await bot.sendMessage(chatId, reply, options);
     }
