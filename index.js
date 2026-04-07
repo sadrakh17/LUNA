@@ -77,6 +77,7 @@ bot.on('message', async (msg) => {
   // ─── Admin commands ────────────────────────────────────────────────────
 
   if (text.startsWith('/analyze')) {
+  if (senderMeta.username !== 'parzival_517') return;
     try {
       await bot.sendChatAction(chatId, 'typing');
       const analysis = await analyzeGroup(chatId);
@@ -86,6 +87,7 @@ bot.on('message', async (msg) => {
   }
 
   if (text.startsWith('/stats')) {
+  if (senderMeta.username !== 'parzival_517') return;
     try {
       const s = await memory.stats(chatId);
       await bot.sendMessage(chatId,
@@ -96,10 +98,14 @@ bot.on('message', async (msg) => {
   }
 
   if (text.startsWith('/reset')) {
-    await memory.clear(chatId);
-    await bot.sendMessage(chatId, '🧹 Chat memory cleared.');
+  if (senderMeta.username !== 'parzival_517') {
+    await bot.sendMessage(chatId, 'kamu siapa tiba-tiba mau reset 😒');
     return;
   }
+  await memory.clear(chatId);
+  await bot.sendMessage(chatId, '🧹 Chat memory cleared.');
+  return;
+}
 
   // ─── Reply logic ───────────────────────────────────────────────────────
 
