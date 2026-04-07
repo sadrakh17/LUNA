@@ -1,0 +1,21 @@
+{
+  "name": "telegram-claude-bot",
+  "version": "1.0.0",
+  "description": "Luna — Claude-powered Telegram bot with persistent Redis memory",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.10.1",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
