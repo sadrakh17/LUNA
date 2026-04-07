@@ -12,6 +12,36 @@ const BOT_NAME     = process.env.BOT_NAME || 'Luna';
 const REPLY_PROB   = parseFloat(process.env.REPLY_PROBABILITY || '0.6');
 const TYPING_DELAY = parseInt(process.env.TYPING_DELAY || '2000');
 
+// ─── Active hours (WIB = UTC+7) ───────────────────────────────────────────
+// Active: 9am–3pm and 5pm–midnight
+// Inactive: 3pm–5pm (afternoon break) and midnight–9am (sleeping)
+
+function getWIBHour() {
+  return (new Date().getUTCHours() + 7) % 24;
+}
+
+function isActiveHour() {
+  const h = getWIBHour();
+  return (h >= 9 && h < 15) || (h >= 17 && h < 24);
+}
+
+// Human-like reply delay: 10–25s active, 30–90s inactive
+function getReplyDelay() {
+  if (isActiveHour()) {
+    return 10000 + Math.random() * 15000;
+  }
+  return 30000 + Math.random() * 60000;
+}
+
+// Offline during: 3pm–5pm (5% chance) and midnight–9am (5% chance)
+function shouldBeOnline() {
+  const h = getWIBHour();
+  if ((h >= 15 && h < 17) || (h >= 0 && h < 9)) {
+    return Math.random() < 0.05;
+  }
+  return true;
+}
+
 if (!TOKEN)                          throw new Error('TELEGRAM_BOT_TOKEN is required');
 if (!process.env.ANTHROPIC_API_KEY)  throw new Error('ANTHROPIC_API_KEY is required');
 if (!process.env.REDIS_URL)          console.warn('[Warn] REDIS_URL not set — using localhost:6379');
@@ -118,20 +148,43 @@ bot.on('message', async (msg) => {
   const isReplyToBot = msg.reply_to_message?.from?.username === BOT_USERNAME;
   const mustReply    = isMentioned || isDM || isReplyToBot;
 
-  if (!mustReply && Math.random() > REPLY_PROB) {
-    // Silently store message to maintain context
+  // Always store message for context, even if not replying
+  if (!mustReply) {
     await memory.addMessage(chatId, 'user', text, senderMeta);
-    return;
+
+    // Check if she's "online" right now
+    if (!shouldBeOnline()) return;
+
+    // Random chance to reply
+    if (Math.random() > REPLY_PROB) return;
+
+    // Don't reply to very short messages unless directly mentioned
+    // (avoids replying to "wkwk", "haha", "oh", "iya" etc)
+    const wordCount = text.trim().split(/\s+/).length;
+    if (wordCount <= 2 && !isMentioned) return;
+
+    // Don't reply if message seems directed at someone else
+    // (contains @username that isn't Luna)
+    const mentionsOther = text.includes('@') && !isMentioned;
+    if (mentionsOther) return;
   }
 
   try {
+    // Human-like delay before even starting to "type"
+    const replyDelay = mustReply
+      ? 5000 + Math.random() * 8000   // 5–13s if directly addressed
+      : getReplyDelay();               // 10–25s or 30–90s based on time
+
+    await sleep(replyDelay);
     await bot.sendChatAction(chatId, 'typing');
-    await sleep(TYPING_DELAY + Math.random() * 1500);
+
+    // Simulate reading + typing time
+    const typingTime = 2000 + Math.random() * 3000;
+    await sleep(typingTime);
 
     let reply = await generateReply(chatId, text, senderMeta);
 
     if (reply) {
-      // Collapse double line breaks into a single space — prevents double sends
       reply = reply.replace(/\n{2,}/g, ' ').trim();
       const options = chatType !== 'private' ? { reply_to_message_id: msg.message_id } : {};
       await bot.sendMessage(chatId, reply, options);
