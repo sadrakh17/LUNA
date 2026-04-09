@@ -3,6 +3,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { memory } from './memory.js';
+import { getMarketContext } from './market.js';
 
 const client        = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const BASE_SYSTEM   = process.env.BOT_SYSTEM_PROMPT;
@@ -22,10 +23,14 @@ export async function generateReply(chatId, incomingText, senderMeta) {
   // Build context: group history + user relationship info + knowledge
   const { addendum, messages } = await memory.buildContext(chatId, userId, CONTEXT_LIMIT);
 
+  // Fetch real-time market data if message is finance-related
+  const marketCtx = await getMarketContext(incomingText);
+
   const displayName = profile.nickname || profile.firstName || profile.username || 'kamu';
 
   const system = BASE_SYSTEM
     + addendum
+    + marketCtx
     + `\n\nPENTING SEKARANG: Kamu sedang membalas pesan dari ${displayName}. `
     + `Sesuaikan tone dan keterbukaan kamu dengan hubungan kalian. `
     + `Jawab singkat dan natural — 1–3 kalimat. Jangan pakai list atau markdown.`;
@@ -56,6 +61,10 @@ export async function generateInitiation(chatId) {
   const recent       = await memory.getRecentRaw(chatId, 15);
   const knowledgeCtx = await memory.getKnowledgeContext();
 
+  // Build a summary of recent messages to detect market topics
+  const recentSummary = recent.map(m => m.content).join(' ');
+  const marketCtx = await getMarketContext(recentSummary);
+
   let userPrompt;
 
   if (recent.length === 0) {
@@ -67,7 +76,7 @@ export async function generateInitiation(chatId) {
     userPrompt = `Ini yang terjadi di grup belakangan ini:\n\n${summary}\n\nSekarang kamu mau masuk ke percakapan secara natural — bisa komentar, tanya sesuatu, atau bawa topik baru yang relevan. 1–2 kalimat, santai.`;
   }
 
-  const system = BASE_SYSTEM + knowledgeCtx
+  const system = BASE_SYSTEM + knowledgeCtx + marketCtx
     + `\n\nKamu lagi mau kirim pesan duluan tanpa diajak bicara. Jangan mulai dengan "hai semua" atau pembukaan kaku. Langsung aja natural.`;
 
   const response = await client.messages.create({
