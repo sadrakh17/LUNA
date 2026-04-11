@@ -172,8 +172,19 @@ async function processBuffer(chatId, chatType) {
   let hasFinance      = false;
   let hasOtherMention = false;
   let hasQuestion     = false;
+  let talkingAboutLuna = false;
   let totalWords      = 0;
   let uniqueSenders   = new Set();
+
+  // Patterns that indicate someone is talking ABOUT Luna, not TO her
+  const talkingAboutPatterns = [
+    /\bdy\b/, /\bdia\b/, /\bsi luna\b/, /\bdynya\b/, /\bdy nya\b/,
+    /dia (masih|udah|lagi|kok|kayak|emang|tuh|sih)/,
+    /\b(dy|dia) (g |ga |gak |tidak |blm |belum )/,
+    /(harusnya|seharusnya|hrsnya) (dy|dia)/,
+    /kok (dy|dia)/,
+    /(update|fix|benerin) (dy|dia|luna|si bot)/,
+  ];
 
   for (const m of messages) {
     const t = m.text.toLowerCase();
@@ -185,12 +196,16 @@ async function processBuffer(chatId, chatType) {
     if (isFinanceMsg(m.text)) hasFinance = true;
     if (m.text.includes('@') && !mentionsLuna) hasOtherMention = true;
     if (m.text.includes('?')) hasQuestion = true;
+    if (!mentionsLuna && talkingAboutPatterns.some(p => p.test(t))) talkingAboutLuna = true;
     totalWords += m.text.trim().split(/\s+/).length;
     uniqueSenders.add(m.senderMeta.username || m.senderMeta.userId);
   }
 
   // ── Hard gates — if any of these hit, Luna stays silent ──────────────────
   if (!hasMustReply) {
+    // People talking ABOUT her, not TO her — stay out
+    if (talkingAboutLuna) return;
+
     // People talking to each other (other @mentions, no finance)
     if (hasOtherMention && !hasFinance) return;
 
