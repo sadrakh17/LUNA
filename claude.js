@@ -92,31 +92,33 @@ export async function generateInitiation(chatId) {
 }
 
 // ─── Contextual reply — handles buffered multi-message window ─────────────
-// Called after the 15s buffer fires. contextSummary is all messages Luna
-// just "read". messageCount tells her how many bubbles arrived.
-export async function generateContextualReply(chatId, contextSummary, lastSenderMeta, messageCount) {
+export async function generateContextualReply(chatId, contextSummary, lastSenderMeta, messageCount, hasMustReply) {
   const { userId, username, firstName } = lastSenderMeta;
   const profile = await memory.getUser(userId, username, firstName);
 
   const { addendum, messages } = await memory.buildContext(chatId, userId, CONTEXT_LIMIT);
+
+  // Only inject market data if current buffer actually contains finance keywords
   const marketCtx = await getMarketContext(contextSummary);
 
-  const displayName = profile.nickname || profile.firstName || profile.username || 'seseorang';
-
-  // Instruction on how many messages she can send back
   const sendInstruction = messageCount >= 3
     ? `Ada beberapa pesan masuk sekaligus. Kamu boleh balas dengan 1, 2, atau maksimal 3 pesan pendek HANYA kalau ada beberapa pertanyaan berbeda atau perlu merespon beberapa orang berbeda. Pisahkan tiap pesan dengan baris baru tunggal. Kalau cukup 1 pesan, kirim 1 saja.`
     : `Balas dengan 1 pesan pendek saja kecuali ada alasan kuat untuk 2.`;
 
+  const contextWarning = !hasMustReply
+    ? `PERHATIAN: Tidak ada yang langsung mention atau reply ke kamu. Sebelum balas, tanya diri sendiri: apakah ini percakapan antara orang lain yang tidak butuh kamu? Kalau ragu — lebih baik diam.\n`
+    : '';
+
   const system = BASE_SYSTEM
     + addendum
     + marketCtx
-    + `\n\nINI PESAN YANG BARU MASUK DALAM 15 DETIK TERAKHIR — hanya respon ini, jangan bawa-bawa topik atau pertanyaan lama yang belum dijawab:\n${contextSummary}\n\n`
+    + `\n\nINI PESAN YANG BARU MASUK DALAM 15 DETIK TERAKHIR — hanya respon ini, jangan bawa-bawa topik lama:\n${contextSummary}\n\n`
+    + contextWarning
     + `${sendInstruction}\n`
-    + `PENTING: Jangan selalu tanya balik. Kadang cukup komentar, setuju, atau jawab tanpa nanya. `
-    + `Jangan ikut campur percakapan yang jelas antara dua orang lain dan ga relevan sama kamu. `
-    + `JANGAN merujuk atau membahas pertanyaan/topik yang kamu tanya sebelumnya tapi tidak dijawab orang — kalau orang skip pertanyaan kamu, lupakan dan ikuti topik yang sedang berjalan sekarang. `
-    + `JANGAN fabrikasi atau pura-pura ingat sesuatu yang tidak ada di pesan yang baru masuk ini. `
+    + `PENTING: Jangan selalu tanya balik. Kadang cukup komentar singkat, setuju, atau diam. `
+    + `JANGAN bahas harga atau data pasar yang tidak disebutkan di pesan baru ini. `
+    + `JANGAN merujuk topik yang kamu tanya sebelumnya tapi di-skip orang — lupakan, ikuti topik sekarang. `
+    + `JANGAN fabrikasi sesuatu yang tidak ada di pesan baru ini. `
     + `Jawab natural dan singkat — jangan pakai markdown, list, atau header.`;
 
   const response = await client.messages.create({
@@ -128,11 +130,8 @@ export async function generateContextualReply(chatId, contextSummary, lastSender
 
   const reply = response.content[0]?.text?.trim() || '';
 
-  // Store as assistant message
   await memory.addMessage(chatId, 'assistant', reply);
   await memory.rewardTrust(userId, 1);
-
-  // Background reflection on the context
   setImmediate(() => reflect(userId, username || firstName, contextSummary, reply));
 
   return reply;

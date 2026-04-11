@@ -219,7 +219,7 @@ async function processBuffer(chatId, chatType) {
     await sleep(2000 + Math.random() * 2000);
 
     const { generateContextualReply } = await import('./claude.js');
-    let reply = await generateContextualReply(chatId, contextSummary, lastMsg.senderMeta, messages.length);
+    let reply = await generateContextualReply(chatId, contextSummary, lastMsg.senderMeta, messages.length, hasMustReply);
 
     if (!reply) return;
 
