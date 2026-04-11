@@ -91,7 +91,51 @@ export async function generateInitiation(chatId) {
   return message;
 }
 
-// ─── Analyze group conversation ───────────────────────────────────────────
+// ─── Contextual reply — handles buffered multi-message window ─────────────
+// Called after the 15s buffer fires. contextSummary is all messages Luna
+// just "read". messageCount tells her how many bubbles arrived.
+export async function generateContextualReply(chatId, contextSummary, lastSenderMeta, messageCount) {
+  const { userId, username, firstName } = lastSenderMeta;
+  const profile = await memory.getUser(userId, username, firstName);
+
+  const { addendum, messages } = await memory.buildContext(chatId, userId, CONTEXT_LIMIT);
+  const marketCtx = await getMarketContext(contextSummary);
+
+  const displayName = profile.nickname || profile.firstName || profile.username || 'seseorang';
+
+  // Instruction on how many messages she can send back
+  const sendInstruction = messageCount >= 3
+    ? `Ada beberapa pesan masuk sekaligus. Kamu boleh balas dengan 1, 2, atau maksimal 3 pesan pendek HANYA kalau ada beberapa pertanyaan berbeda atau perlu merespon beberapa orang berbeda. Pisahkan tiap pesan dengan baris baru tunggal. Kalau cukup 1 pesan, kirim 1 saja.`
+    : `Balas dengan 1 pesan pendek saja kecuali ada alasan kuat untuk 2.`;
+
+  const system = BASE_SYSTEM
+    + addendum
+    + marketCtx
+    + `\n\nINI YANG BARU AJA TERJADI DI GRUP (kamu baru selesai baca):\n${contextSummary}\n\n`
+    + `${sendInstruction}\n`
+    + `PENTING: Jangan selalu tanya balik. Kadang cukup komentar, setuju, atau jawab tanpa nanya. `
+    + `Jangan ikut campur percakapan yang jelas antara dua orang lain dan ga relevan sama kamu. `
+    + `Jawab natural dan singkat — jangan pakai markdown, list, atau header.`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 500,
+    system,
+    messages,
+  });
+
+  const reply = response.content[0]?.text?.trim() || '';
+
+  // Store as assistant message
+  await memory.addMessage(chatId, 'assistant', reply);
+  await memory.rewardTrust(userId, 1);
+
+  // Background reflection on the context
+  setImmediate(() => reflect(userId, username || firstName, contextSummary, reply));
+
+  return reply;
+}
+
 export async function analyzeGroup(chatId) {
   const recent = await memory.getRecentRaw(chatId, 30);
   if (recent.length === 0) return 'Belum ada cukup percakapan untuk dianalisis.';

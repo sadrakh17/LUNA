@@ -91,6 +91,174 @@ bot.on('my_chat_member', async (update) => {
   }
 });
 
+// ─── Per-chat message buffer ──────────────────────────────────────────────
+// Each chat has a buffer that accumulates incoming messages.
+// A 15s timer resets every time a new message arrives.
+// When the timer fires, Luna reads ALL buffered messages together,
+// decides if/how to respond, and sends 1–3 messages depending on context.
+
+const chatBuffers  = new Map(); // chatId -> { messages: [], timer, hasMustReply }
+const BUFFER_WAIT  = 15000;    // 15 seconds — resets on every new message
+
+const financeKeywords = [
+  'btc','bitcoin','eth','crypto','saham','forex','trading','xau','gold','emas',
+  'pump','dump','bullish','bearish','breakout','support','resistance','chart',
+  'timeframe','tf','entry','sl','tp','profit','rugi','loss','pair','market',
+  'iran','us','war','perang','geopolitik','fed','inflasi','dolar','dollar',
+  'nasdaq','sp500','oil','minyak','komoditas','altcoin','defi','macro',
+  'sanksi','nuklir','opec','rate','suku bunga'
+];
+
+function isFinanceMsg(text) {
+  const t = text.toLowerCase();
+  return financeKeywords.some(kw => t.includes(kw));
+}
+
+// ─── Admin commands ───────────────────────────────────────────────────────
+async function handleAdminCommand(msg, chatId, text, senderMeta) {
+  if (text.startsWith('/analyze')) {
+    if (senderMeta.username !== 'parzival_517') return true;
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const analysis = await analyzeGroup(chatId);
+      await bot.sendMessage(chatId, `📊 *Group Analysis*\n\n${analysis}`, { parse_mode: 'Markdown' });
+    } catch (err) { console.error('[/analyze]', err.message); }
+    return true;
+  }
+  if (text.startsWith('/stats')) {
+    if (senderMeta.username !== 'parzival_517') return true;
+    try {
+      const s = await memory.stats(chatId);
+      await bot.sendMessage(chatId,
+        `👥 Users known: ${s.userCount}\n💬 Messages in memory: ${s.messageCount}\n🧠 Knowledge entries: ${s.knowledgeCount}\n🗣 Participants: ${s.participants.join(', ') || 'none'}`
+      );
+    } catch (err) { console.error('[/stats]', err.message); }
+    return true;
+  }
+  if (text.startsWith('/reset')) {
+    if (senderMeta.username !== 'parzival_517') {
+      await bot.sendMessage(chatId, 'kamu siapa tiba-tiba mau reset 😒');
+      return true;
+    }
+    await memory.clear(chatId);
+    await bot.sendMessage(chatId, '🧹 Chat memory cleared.');
+    return true;
+  }
+  return false;
+}
+
+// ─── Process buffered messages and decide whether/how to respond ──────────
+async function processBuffer(chatId, chatType) {
+  const buf = chatBuffers.get(chatId);
+  if (!buf || buf.messages.length === 0) return;
+
+  const messages = [...buf.messages];
+  chatBuffers.delete(chatId);
+
+  // Store all buffered messages into memory first
+  for (const m of messages) {
+    await memory.addMessage(chatId, 'user', m.text, m.senderMeta);
+    await memory.getUser(m.senderMeta.userId, m.senderMeta.username, m.senderMeta.firstName);
+  }
+
+  // Check online status
+  if (!shouldBeOnline()) return;
+
+  const nameLower = BOT_NAME.toLowerCase();
+  const botHandle = `@${BOT_USERNAME?.toLowerCase()}`;
+
+  // Classify each message
+  let hasMustReply   = false;
+  let hasFinance     = false;
+  let hasOtherMention = false;
+  let totalWords     = 0;
+
+  for (const m of messages) {
+    const t = m.text.toLowerCase();
+    const mentionsLuna = t.includes(botHandle) || t.includes(nameLower);
+    const isReplyToBot = m.replyToBot;
+    const isDM         = chatType === 'private';
+
+    if (mentionsLuna || isReplyToBot || isDM) hasMustReply = true;
+    if (isFinanceMsg(m.text)) hasFinance = true;
+    if (m.text.includes('@') && !mentionsLuna) hasOtherMention = true;
+    totalWords += m.text.trim().split(/\s+/).length;
+  }
+
+  // Decide whether to respond at all
+  if (!hasMustReply) {
+    // Ignore if all messages are directed at others
+    if (hasOtherMention && !hasFinance) return;
+
+    // Ignore if all messages are too short (pure reactions)
+    if (totalWords <= messages.length * 2) return;
+
+    // Finance topic: 80% chance. Otherwise normal probability
+    const effectiveProb = hasFinance ? 0.8 : REPLY_PROB;
+    if (Math.random() > effectiveProb) return;
+  }
+
+  // Build a combined context string of all buffered messages
+  const contextSummary = messages
+    .map(m => `[${m.senderMeta.username || m.senderMeta.firstName || 'someone'}]: ${m.text}`)
+    .join('\n');
+
+  // Typing simulation
+  const typingDelay = hasMustReply
+    ? 3000 + Math.random() * 4000
+    : 4000 + Math.random() * 6000;
+
+  await sleep(typingDelay);
+
+  // Generate reply using the last message as the "trigger"
+  // but Claude will see all of them in the context window
+  const lastMsg = messages[messages.length - 1];
+
+  try {
+    await bot.sendChatAction(chatId, 'typing');
+    await sleep(2000 + Math.random() * 2000);
+
+    const { generateContextualReply } = await import('./claude.js');
+    let reply = await generateContextualReply(chatId, contextSummary, lastMsg.senderMeta, messages.length);
+
+    if (!reply) return;
+
+    // Split into natural message chunks if Claude returned multiple paragraphs
+    // Max 3 messages. Each separated by a single newline with natural delay between.
+    const chunks = reply
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    // Group into at most 3 sends
+    const sends = [];
+    if (chunks.length <= 3) {
+      sends.push(...chunks);
+    } else {
+      // Merge excess chunks into the last send
+      sends.push(chunks[0]);
+      sends.push(chunks[1]);
+      sends.push(chunks.slice(2).join(' '));
+    }
+
+    const replyToId = lastMsg.messageId;
+    for (let i = 0; i < sends.length; i++) {
+      const text = sends[i].replace(/\n{2,}/g, ' ').trim();
+      if (!text) continue;
+      const options = chatType !== 'private' && i === 0 ? { reply_to_message_id: replyToId } : {};
+      await bot.sendMessage(chatId, text, options);
+      if (i < sends.length - 1) {
+        // Natural pause between messages (1.5–3s)
+        await sleep(1500 + Math.random() * 1500);
+        await bot.sendChatAction(chatId, 'typing');
+        await sleep(1000 + Math.random() * 1500);
+      }
+    }
+  } catch (err) {
+    console.error('[ProcessBuffer]', err.message);
+  }
+}
+
 // ─── Message handler ──────────────────────────────────────────────────────
 bot.on('message', async (msg) => {
   const chatId   = msg.chat.id;
@@ -102,110 +270,29 @@ bot.on('message', async (msg) => {
   const senderMeta = extractSenderMeta(msg.from);
   if (chatType !== 'private') trackGroup(chatId);
 
-  // Always ensure user profile exists in Redis
-  await memory.getUser(senderMeta.userId, senderMeta.username, senderMeta.firstName);
+  // Handle admin commands immediately — no buffering
+  const isCommand = await handleAdminCommand(msg, chatId, text, senderMeta);
+  if (isCommand) return;
 
-  // ─── Admin commands ────────────────────────────────────────────────────
-
-  if (text.startsWith('/analyze')) {
-  if (senderMeta.username !== 'parzival_517') return;
-    try {
-      await bot.sendChatAction(chatId, 'typing');
-      const analysis = await analyzeGroup(chatId);
-      await bot.sendMessage(chatId, `📊 *Group Analysis*\n\n${analysis}`, { parse_mode: 'Markdown' });
-    } catch (err) { console.error('[/analyze]', err.message); }
-    return;
+  // Buffer the message
+  if (!chatBuffers.has(chatId)) {
+    chatBuffers.set(chatId, { messages: [], timer: null });
   }
 
-  if (text.startsWith('/stats')) {
-  if (senderMeta.username !== 'parzival_517') return;
-    try {
-      const s = await memory.stats(chatId);
-      await bot.sendMessage(chatId,
-        `👥 Users known: ${s.userCount}\n💬 Messages in memory: ${s.messageCount}\n🧠 Knowledge entries: ${s.knowledgeCount}\n🗣 Participants: ${s.participants.join(', ') || 'none'}`
-      );
-    } catch (err) { console.error('[/stats]', err.message); }
-    return;
-  }
+  const buf = chatBuffers.get(chatId);
 
-  if (text.startsWith('/reset')) {
-  if (senderMeta.username !== 'parzival_517') {
-    await bot.sendMessage(chatId, 'kamu siapa tiba-tiba mau reset 😒');
-    return;
-  }
-  await memory.clear(chatId);
-  await bot.sendMessage(chatId, '🧹 Chat memory cleared.');
-  return;
-}
+  // Clear existing timer — reset the 15s window
+  if (buf.timer) clearTimeout(buf.timer);
 
-  // ─── Reply logic ───────────────────────────────────────────────────────
+  buf.messages.push({
+    text,
+    senderMeta,
+    messageId:  msg.message_id,
+    replyToBot: msg.reply_to_message?.from?.username === BOT_USERNAME,
+  });
 
-  const nameLower = BOT_NAME.toLowerCase();
-  const msgLower  = text.toLowerCase();
-
-  const isMentioned  = msgLower.includes(`@${BOT_USERNAME?.toLowerCase()}`) || msgLower.includes(nameLower);
-  const isDM         = chatType === 'private';
-  const isReplyToBot = msg.reply_to_message?.from?.username === BOT_USERNAME;
-  const mustReply    = isMentioned || isDM || isReplyToBot;
-
-  // Always store message for context, even if not replying
-  if (!mustReply) {
-    await memory.addMessage(chatId, 'user', text, senderMeta);
-
-    // Check if she's "online" right now
-    if (!shouldBeOnline()) return;
-
-    // Don't reply if message seems directed at someone else
-    const mentionsOther = text.includes('@') && !isMentioned;
-    if (mentionsOther) return;
-
-    // Don't reply to very short messages (wkwk, haha, oh, iya, etc)
-    const wordCount = text.trim().split(/\s+/).length;
-    if (wordCount <= 2) return;
-
-    // Finance/geopolitics keywords — Luna is passionate about these
-    // so she's much more likely to jump in unprompted
-    const financeKeywords = [
-      'btc','bitcoin','eth','crypto','saham','forex','trading','xau','gold','emas',
-      'pump','dump','bullish','bearish','breakout','support','resistance','chart',
-      'timeframe','tf','entry','sl','tp','profit','rugi','loss','pair','market',
-      'iran','us','war','perang','geopolitik','fed','inflasi','dolar','dollar',
-      'nasdaq','sp500','oil','minyak','komoditas','altcoin','defi','macro','damai',
-      'perang','sanksi','nuklir','opec','rate','suku bunga'
-    ];
-
-    const msgLowerFull = text.toLowerCase();
-    const isFinanceTopic = financeKeywords.some(kw => msgLowerFull.includes(kw));
-
-    // Finance/geo topics: 80% chance she jumps in
-    // Everything else: normal reply probability
-    const effectiveProb = isFinanceTopic ? 0.8 : REPLY_PROB;
-    if (Math.random() > effectiveProb) return;
-  }
-
-  try {
-    // Human-like delay before even starting to "type"
-    const replyDelay = mustReply
-      ? 5000 + Math.random() * 8000   // 5–13s if directly addressed
-      : getReplyDelay();               // 10–25s or 30–90s based on time
-
-    await sleep(replyDelay);
-    await bot.sendChatAction(chatId, 'typing');
-
-    // Simulate reading + typing time
-    const typingTime = 2000 + Math.random() * 3000;
-    await sleep(typingTime);
-
-    let reply = await generateReply(chatId, text, senderMeta);
-
-    if (reply) {
-      reply = reply.replace(/\n{2,}/g, ' ').trim();
-      const options = chatType !== 'private' ? { reply_to_message_id: msg.message_id } : {};
-      await bot.sendMessage(chatId, reply, options);
-    }
-  } catch (err) {
-    console.error('[Message handler]', err.message);
-  }
+  // Set new 15s timer
+  buf.timer = setTimeout(() => processBuffer(chatId, chatType), BUFFER_WAIT);
 });
 
 // ─── Errors & scheduler ───────────────────────────────────────────────────
