@@ -168,10 +168,12 @@ async function processBuffer(chatId, chatType) {
   const botHandle = `@${BOT_USERNAME?.toLowerCase()}`;
 
   // Classify each message
-  let hasMustReply   = false;
-  let hasFinance     = false;
+  let hasMustReply    = false;
+  let hasFinance      = false;
   let hasOtherMention = false;
-  let totalWords     = 0;
+  let hasQuestion     = false;
+  let totalWords      = 0;
+  let uniqueSenders   = new Set();
 
   for (const m of messages) {
     const t = m.text.toLowerCase();
@@ -182,20 +184,28 @@ async function processBuffer(chatId, chatType) {
     if (mentionsLuna || isReplyToBot || isDM) hasMustReply = true;
     if (isFinanceMsg(m.text)) hasFinance = true;
     if (m.text.includes('@') && !mentionsLuna) hasOtherMention = true;
+    if (m.text.includes('?')) hasQuestion = true;
     totalWords += m.text.trim().split(/\s+/).length;
+    uniqueSenders.add(m.senderMeta.username || m.senderMeta.userId);
   }
 
-  // Decide whether to respond at all
+  // ── Hard gates — if any of these hit, Luna stays silent ──────────────────
   if (!hasMustReply) {
-    // Ignore if all messages are directed at others
+    // People talking to each other (other @mentions, no finance)
     if (hasOtherMention && !hasFinance) return;
 
-    // Ignore if all messages are too short (pure reactions)
+    // Pure reactions — too short to be worth joining
     if (totalWords <= messages.length * 2) return;
 
-    // Finance topic: 80% chance. Otherwise normal probability
-    const effectiveProb = hasFinance ? 0.8 : REPLY_PROB;
-    if (Math.random() > effectiveProb) return;
+    // Single sender, no question, no finance — they're just talking to themselves
+    if (uniqueSenders.size === 1 && !hasQuestion && !hasFinance) return;
+
+    // No question directed at group + no finance = not an open invitation
+    if (!hasQuestion && !hasFinance) return;
+
+    // Finance topic: 75% chance. Open question to group: 50%. Otherwise skip.
+    const effectiveProb = hasFinance ? 0.75 : (hasQuestion ? 0.5 : 0);
+    if (effectiveProb === 0 || Math.random() > effectiveProb) return;
   }
 
   // Build a combined context string of all buffered messages
