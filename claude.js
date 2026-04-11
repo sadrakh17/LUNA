@@ -111,10 +111,12 @@ export async function generateContextualReply(chatId, contextSummary, lastSender
   const system = BASE_SYSTEM
     + addendum
     + marketCtx
-    + `\n\nINI YANG BARU AJA TERJADI DI GRUP (kamu baru selesai baca):\n${contextSummary}\n\n`
+    + `\n\nINI PESAN YANG BARU MASUK DALAM 15 DETIK TERAKHIR — hanya respon ini, jangan bawa-bawa topik atau pertanyaan lama yang belum dijawab:\n${contextSummary}\n\n`
     + `${sendInstruction}\n`
     + `PENTING: Jangan selalu tanya balik. Kadang cukup komentar, setuju, atau jawab tanpa nanya. `
     + `Jangan ikut campur percakapan yang jelas antara dua orang lain dan ga relevan sama kamu. `
+    + `JANGAN merujuk atau membahas pertanyaan/topik yang kamu tanya sebelumnya tapi tidak dijawab orang — kalau orang skip pertanyaan kamu, lupakan dan ikuti topik yang sedang berjalan sekarang. `
+    + `JANGAN fabrikasi atau pura-pura ingat sesuatu yang tidak ada di pesan yang baru masuk ini. `
     + `Jawab natural dan singkat — jangan pakai markdown, list, atau header.`;
 
   const response = await client.messages.create({
